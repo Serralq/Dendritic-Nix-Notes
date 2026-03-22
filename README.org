@@ -1,0 +1,125 @@
+* Den notes v3
+** Goal: seperate features and implementation of features
+- [[https://den.oeiuwq.com/explanation/library-vs-framework/][Restates how library vs framework]]
+- Assumption: can work without flake-parts, and without flakes
+    but I will be talking only about flakes
+- This is an overview of the concepts, not of exact implementation
+  Read the [[https://den.oeiuwq.com][main guide]] for the complete info
+- Also use the deep wiki for den specific info
+  much better than regular gemini or claude
+  But fails regarding standard nix info
+** Den as library
+allows for custom import system using
+  | aspect    | how to organize features        |
+  | class     | how to implement features       |
+  | context   | how to import & resolve classes |
+  | namespace | share features                  |
+** Den as framework
+- Prebuilt import system for a normal laptop / server system
+- Provided as a framework
+  | Feature   | Extra Description        | Implementation                           |
+  |-----------+--------------------------+------------------------------------------|
+  | Schema    | For hardware definitions | via den.schema (framework-only variable) |
+  | Batteries | Reusable functions       | via [[https://den.oeiuwq.com/reference/batteries/#_top][den.provides]]                         |
+  | Class     |                          | via den.{host, user, home}.<aspect>      |
+  | Context   |                          | via [[https://den.oeiuwq.com/explanation/context-pipeline/][den.ctx.host etc.]] for above class    |
+- Automatic aspect.class creation
+  To create based on the defined hosts and schema
+  then the later den.aspect.<user> will augment the config
+  #+BEGIN_SRC nix
+# Linux host with user using hjem
+den.hosts.x86_64-linux.laptop.users.alice = {
+  classes = [ "hjem" ];
+};
+# Multiple home environments for the same user
+den.hosts.x86_64-linux.igloo.users.tux = {
+  classes = [ "homeManager" "hjem" ];
+};
+# Darwin host (nix-darwin) with user
+den.hosts.aarch64-darwin.mac.users.alice = { };
+# Standalone hjem on Linux
+den.homes.x86_64-linux.alice = {};
+
+# Standalone home-manager on Darwin
+den.homes.aarch64-darwin.alice = {};
+#+END_SRC
+- ._nixos folders so we can use regular modules and not flake parts
+*** Integration to nixos
+1) Import den as flake input, and within main den flake parts
+   #+BEGIN_SRC nix
+imports = [ inputs.den.flakeModule ]; allows for den framework, not just library
+   #+END_SRC
+2) Within a let statement is den's evaluation
+   1) Define aspect
+   2) Resolve per class
+3) Produces a module for you to import
+** Library concept // minimum knowledge check //
+*** Aspect.class
+- Aspects are features
+  Has direct configs
+  Includes
+    { raw } will always apply
+    ({ input }: {  }) only apply with context containing input
+    other.aspects.features
+  Provides -> named sub aspects
+- Class are how those aspects are implemented
+  - Prebuilt are nix-darwin, nixos, home-manager, hejm, nix-maid etc.
+  - Can make your own, eg: for git, or for only systems with imperanence enabled
+    Can define how code within den is forwarded into the implementation code
+    Can create guard or conditions for the evaluation
+*** Import system via context, can make your own custom context
+Uses provides to show what's availible for importing
+Uses include  from the importing side
+Uses into     to show how to go from one context to another context
+- Eg: host
+  | provide | host, user |
+  | into    | user        |
+- Another example for when my-service.enable = true
+  #+BEGIN_SRC nix
+  den.ctx.my-service = {
+    description = "Custom service context";
+    provides.my-service = den.aspects.my-service;
+  };
+
+  den.ctx.host.into.my-service = { host }:
+    lib.optional host.my-service.enable { inherit host; };
+
+  den.aspects.my-service = { host }: {
+    nixos.services.my-service.hostName = host.hostName;
+  };
+  #+END_SRC
+** Framework only concept // minimum knowledge checks //
+*** Schema as undefined possible users
+- Can do:
+  adding options
+  setting defaults
+  sharing universal configs
+- Schema	        Applied To	Use Case
+  den.schema.conf	All entities	Shared options/config
+  den.schema.host	All hosts	Host-specific defaults/options
+  den.schema.user	All users	User-specific defaults/options
+  den.schema.home	All homes	Home-specific defaults/options
+*** den.default is the actual config
+den.schema  is for the list of options
+** Import system expanded // not needed to use includes //
+*** Vs nix module system
+- Imports then config, but if import relies on config for condition -> breaks
+- Work around is to import unconditionally then activate based on config using mkIf
+- SpecialArgs is global so it's an anti-pattern
+- _module-args has same issue with config, can get merge conflicts
+  it lives under config so inherits all the issues
+*** Den's Workaround
+Evals includes before any nix evals(modules and regular eval)
+1) Acts within function land (not module land) allowing for function helpers
+2) Context system to allow for staged evals
+3) In each stage only eval if it has all dependency is a nice to have
+*** Context resolution
+// Nice to have, not essential to solve the circular import issue //
+- Only resolves when has the required inputs
+    Thus no need to check if var is valid
+    eg for gpu aspect, can check if host's gpu is nvidia
+      and remove need to check if there is a host or not
+  - Free deduplication
+- Underlying implementation: [[https://den.oeiuwq.com/explanation/parametric/][Parmetric Aspects]]
+  standard nix has functors which run in any context,
+  den uses functors but only runs these when the context matches
